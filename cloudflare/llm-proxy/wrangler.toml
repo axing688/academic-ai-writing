@@ -1,0 +1,7 @@
+name = "awa-llm-proxy"
+main = "src/index.js"
+compatibility_date = "2026-01-01"
+
+# [vars]
+# 可选：设置后只允许来自该域名前缀的请求调用本 Worker（防盗用）
+# ALLOWED_ORIGIN = "https://your-domain.com"

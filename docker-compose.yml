@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  # MySQL 数据库
+  mysql:
+    image: mysql:8.0
+    container_name: academic-writing-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: academic_writing
+      MYSQL_USER: app_user
+      MYSQL_PASSWORD: app_password
+      TZ: Asia/Shanghai
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-prootpassword"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - academic-network
+
+  # Redis 缓存
+  redis:
+    image: redis:7-alpine
+    container_name: academic-writing-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - academic-network
+
+  # 后端服务（Go，构建镜像运行）
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: academic-writing-backend
+    ports:
+      - "8080:8080"
+    environment:
+      - GIN_MODE=release
+      - SERVER_MODE=production
+      - SERVER_PORT=8080
+      - DATABASE_HOST=mysql
+      - DATABASE_PORT=3306
+      - DATABASE_USER=app_user
+      - DATABASE_PASSWORD=app_password
+      - DATABASE_DBNAME=academic_writing
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - AI_PROVIDER=dashscope
+      - AI_MODEL=qwen-turbo
+      - AI_API_KEY=${DASHSCOPE_API_KEY:-your-dashscope-api-key}
+      - AI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+      - JWT_SECRET_KEY=jwt-secret-key-academic-writing
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - academic-network
+
+  # 前端服务（构建静态文件 + nginx 托管并反向代理后端）
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: academic-writing-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - academic-network
+
+volumes:
+  mysql_data:
+  redis_data:
+
+networks:
+  academic-network:
+    driver: bridge

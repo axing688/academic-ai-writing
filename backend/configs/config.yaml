@@ -1,0 +1,31 @@
+server:
+  mode: "development"
+  port: "8080"
+  secret: "academic-writing-secret-2024"
+
+database:
+  host: "localhost"
+  port: "3306"
+  user: "root"
+  password: "password"
+  dbname: "academic_writing"
+  sslmode: "false"
+
+redis:
+  host: "localhost"
+  port: "6379"
+  password: ""
+  db: 0
+
+ai:
+  provider: "dashscope"
+  model: "qwen-turbo"
+  api_key: "your-dashscope-api-key"
+  base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  max_tokens: 2048
+  temperature: 0.7
+
+jwt:
+  secret_key: "jwt-secret-key-academic-writing"
+  issuer: "academic-writing-assistant"
+  expires_at: 24

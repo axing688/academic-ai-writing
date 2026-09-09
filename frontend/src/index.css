@@ -1,0 +1,382 @@
+/* ============ iOS 26 液态玻璃设计系统 ============ */
+
+:root {
+  /* 玻璃表面 */
+  --glass-bg: rgba(255, 255, 255, 0.55);
+  --glass-bg-strong: rgba(255, 255, 255, 0.72);
+  --glass-bg-soft: rgba(255, 255, 255, 0.38);
+  --glass-border: rgba(255, 255, 255, 0.65);
+  --glass-border-inner: rgba(255, 255, 255, 0.9);
+  --glass-shadow: 0 8px 32px rgba(31, 38, 135, 0.12);
+  --glass-shadow-hover: 0 16px 48px rgba(31, 38, 135, 0.18);
+
+  /* 文字 */
+  --text-primary: #1d1d1f;
+  --text-secondary: rgba(60, 60, 67, 0.62);
+  --text-tertiary: rgba(60, 60, 67, 0.38);
+
+  /* 主题色（iOS 系统蓝） */
+  --ios-blue: #0a84ff;
+  --ios-blue-deep: #0060df;
+  --ios-purple: #bf5af2;
+  --ios-pink: #ff375f;
+  --ios-teal: #30d5c8;
+
+  /* 动效 */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+  --radius-lg: 24px;
+  --radius-md: 18px;
+  --radius-sm: 12px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: var(--text-primary);
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* ============ 渐变流光背景 ============ */
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  background: linear-gradient(135deg, #e8f0ff 0%, #f3e8ff 38%, #ffe8f0 68%, #e8fff5 100%);
+}
+
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(42rem 42rem at 12% 18%, rgba(10, 132, 255, 0.16), transparent 60%),
+    radial-gradient(38rem 38rem at 88% 12%, rgba(191, 90, 242, 0.14), transparent 60%),
+    radial-gradient(40rem 40rem at 78% 82%, rgba(255, 55, 95, 0.10), transparent 60%),
+    radial-gradient(36rem 36rem at 20% 88%, rgba(48, 213, 200, 0.14), transparent 60%);
+  animation: ambientDrift 26s ease-in-out infinite alternate;
+}
+
+@keyframes ambientDrift {
+  0% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(-1.5%, 1.5%, 0) scale(1.04); }
+  100% { transform: translate3d(1.5%, -1%, 0) scale(1.02); }
+}
+
+/* ============ 玻璃面板基类 ============ */
+
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-border-inner);
+  border-radius: var(--radius-lg);
+  transition: box-shadow 0.45s var(--ease-smooth), transform 0.45s var(--ease-smooth),
+    background 0.45s var(--ease-smooth);
+}
+
+.glass-strong {
+  background: var(--glass-bg-strong);
+  backdrop-filter: blur(32px) saturate(190%);
+  -webkit-backdrop-filter: blur(32px) saturate(190%);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-border-inner);
+  border-radius: var(--radius-lg);
+}
+
+.glass-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--glass-shadow-hover), inset 0 1px 0 var(--glass-border-inner);
+}
+
+.glass-inset {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  box-shadow: inset 0 1px 3px rgba(31, 38, 135, 0.06);
+}
+
+/* ============ 布局 ============ */
+
+.layout-container {
+  min-height: 100vh;
+  display: flex;
+  background: transparent;
+}
+
+.sidebar {
+  background: var(--glass-bg-soft) !important;
+  backdrop-filter: blur(32px) saturate(180%);
+  -webkit-backdrop-filter: blur(32px) saturate(180%);
+  border-right: 1px solid var(--glass-border);
+  box-shadow: 4px 0 32px rgba(31, 38, 135, 0.06);
+  transition: width 0.4s var(--ease-spring);
+}
+
+.sidebar-logo {
+  height: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-primary);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 0 12px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.sidebar-logo::after {
+  content: '';
+}
+
+.sidebar-menu {
+  background: transparent !important;
+  border-inline-end: none !important;
+  padding: 8px 12px !important;
+}
+
+.sidebar-menu .ant-menu-item {
+  border-radius: 14px !important;
+  margin-block: 6px !important;
+  color: var(--text-secondary) !important;
+  font-weight: 500;
+  transition: all 0.35s var(--ease-smooth) !important;
+}
+
+.sidebar-menu .ant-menu-item:hover {
+  background: rgba(255, 255, 255, 0.55) !important;
+  transform: translateX(2px);
+}
+
+.sidebar-menu .ant-menu-item-selected {
+  background: linear-gradient(135deg, rgba(10, 132, 255, 0.9), rgba(191, 90, 242, 0.85)) !important;
+  color: #fff !important;
+  box-shadow: 0 6px 20px rgba(10, 132, 255, 0.35);
+}
+
+.content-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.header {
+  height: 68px;
+  margin: 16px 20px 0;
+  padding: 0 26px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--glass-bg-strong);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--glass-shadow), inset 0 1px 0 var(--glass-border-inner);
+}
+
+.header h1 {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.3px;
+}
+
+.main-content {
+  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
+  animation: pageIn 0.5s var(--ease-smooth) both;
+}
+
+@keyframes pageIn {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ============ 玻璃卡片内的 Antd 调和 ============ */
+
+.glass .ant-card {
+  background: transparent;
+  box-shadow: none;
+}
+
+.ant-card {
+  border-radius: var(--radius-md) !important;
+  transition: all 0.4s var(--ease-smooth);
+}
+
+/* ============ 统计卡片 ============ */
+
+.stat-card {
+  padding: 24px;
+  position: relative;
+  overflow: hidden;
+  cursor: default;
+}
+
+.stat-card::before {
+  content: '';
+  position: absolute;
+  top: -40px;
+  right: -40px;
+  width: 130px;
+  height: 130px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.75), transparent 70%);
+  pointer-events: none;
+}
+
+.stat-value {
+  font-size: 34px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  background: linear-gradient(120deg, var(--ios-blue), var(--ios-purple));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.stat-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+  letter-spacing: 0.4px;
+}
+
+/* ============ 编辑器与结果区 ============ */
+
+.editor-textarea textarea {
+  background: transparent !important;
+  font-size: 14.5px !important;
+}
+
+.ai-result-box {
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  white-space: pre-wrap;
+  font-size: 13px;
+  line-height: 1.9;
+  max-height: 380px;
+  overflow-y: auto;
+  box-shadow: inset 0 2px 12px rgba(31, 38, 135, 0.05);
+  transition: max-height 0.5s var(--ease-smooth);
+}
+
+.ai-result-box::-webkit-scrollbar,
+.main-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.ai-result-box::-webkit-scrollbar-thumb,
+.main-content::-webkit-scrollbar-thumb {
+  background: rgba(31, 38, 135, 0.18);
+  border-radius: 6px;
+}
+
+/* ============ 按钮与交互动效 ============ */
+
+.ant-btn {
+  border-radius: 12px !important;
+  font-weight: 600;
+  transition: all 0.3s var(--ease-smooth) !important;
+}
+
+.ant-btn:not(:disabled):hover {
+  transform: translateY(-1px);
+}
+
+.ant-btn:not(:disabled):active {
+  transform: scale(0.97);
+}
+
+.ant-btn-primary {
+  background: linear-gradient(135deg, var(--ios-blue), var(--ios-purple)) !important;
+  border: none !important;
+  box-shadow: 0 6px 20px rgba(10, 132, 255, 0.35) !important;
+}
+
+.ant-btn-primary:not(:disabled):hover {
+  box-shadow: 0 10px 28px rgba(10, 132, 255, 0.45) !important;
+}
+
+.ant-input,
+.ant-input-affix-wrapper,
+.ant-select:not(.ant-select-customize-input) .ant-select-selector,
+.ant-input-number {
+  border-radius: 12px !important;
+  background: rgba(255, 255, 255, 0.6) !important;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: all 0.3s var(--ease-smooth) !important;
+}
+
+.ant-select-selector,
+.ant-select-dropdown {
+  border-radius: 12px !important;
+}
+
+.ant-select-dropdown {
+  background: var(--glass-bg-strong) !important;
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow) !important;
+}
+
+.ant-tabs-tab {
+  font-weight: 600;
+  transition: all 0.3s var(--ease-smooth) !important;
+}
+
+.ant-modal-content,
+.ant-message-notice-content {
+  border-radius: 16px !important;
+  background: var(--glass-bg-strong) !important;
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+}
+
+/* ============ 列表条目 ============ */
+
+.doc-row {
+  cursor: pointer;
+  transition: all 0.35s var(--ease-smooth);
+}
+
+.doc-row:hover {
+  transform: translateY(-2px) scale(1.005);
+}
+
+/* ============ 通用工具 ============ */
+
+.text-secondary {
+  color: var(--text-secondary);
+}
+
+.divider-glass {
+  border: none;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(31, 38, 135, 0.15), transparent);
+}
