@@ -160,12 +160,18 @@ body::after {
   transition: all 0.35s var(--ease-smooth) !important;
 }
 
-.sidebar-menu .ant-menu-item:hover {
+.sidebar-menu .ant-menu-item:hover:not(.ant-menu-item-selected),
+.sidebar-menu .ant-menu-item:active:not(.ant-menu-item-selected),
+.sidebar-menu .ant-menu-item-active:not(.ant-menu-item-selected) {
   background: rgba(255, 255, 255, 0.55) !important;
   transform: translateX(2px);
 }
 
-.sidebar-menu .ant-menu-item-selected {
+/* 选中项悬停/按压时保持渐变与白字，避免被白色悬停背景盖住变成"白底白字" */
+.sidebar-menu .ant-menu-item-selected,
+.sidebar-menu .ant-menu-item-selected:hover,
+.sidebar-menu .ant-menu-item-selected:active,
+.sidebar-menu .ant-menu-item-selected.ant-menu-item-active {
   background: linear-gradient(135deg, rgba(10, 132, 255, 0.9), rgba(191, 90, 242, 0.85)) !important;
   color: #fff !important;
   box-shadow: 0 6px 20px rgba(10, 132, 255, 0.35);
