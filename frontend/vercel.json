@@ -7,7 +7,7 @@
     },
     {
       "source": "/llm/:path*",
-      "destination": "https://REPLACE-WITH-YOUR-WORKER-HOST/llm/:path*"
+      "destination": "https://awa-llm-proxy.3355453688.workers.dev/llm/:path*"
     },
     {
       "source": "/((?!api|llm).*)",
