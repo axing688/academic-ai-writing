@@ -60,7 +60,8 @@ const Settings: React.FC = () => {
     }
   }
 
-  const domestic = PROVIDERS.filter((p) => p.region === '国内')
+  const localProviders = PROVIDERS.filter((p) => p.local || p.id === 'custom')
+  const domestic = PROVIDERS.filter((p) => p.region === '国内' && !p.local && p.id !== 'demo' && p.id !== 'custom')
   const abroad = PROVIDERS.filter((p) => p.region === '国外')
 
   return (
@@ -98,10 +99,12 @@ const Settings: React.FC = () => {
                     options: PROVIDERS.filter((p) => p.id === 'demo').map((p) => ({ value: p.id, label: p.name })),
                   },
                   {
+                    label: '── 本地模型（离线）/ 自定义端点 ──',
+                    options: localProviders.map((p) => ({ value: p.id, label: p.name })),
+                  },
+                  {
                     label: '── 国内服务商 ──',
-                    options: domestic
-                      .filter((p) => p.id !== 'demo')
-                      .map((p) => ({ value: p.id, label: p.name })),
+                    options: domestic.map((p) => ({ value: p.id, label: p.name })),
                   },
                   {
                     label: '── 国外服务商 ──',
@@ -140,27 +143,39 @@ const Settings: React.FC = () => {
                         <Input placeholder="https://your-endpoint/v1" />
                       </Form.Item>
                     )}
+                    {!p.noKey && (
+                      <Form.Item
+                        label="API Key"
+                        name="apiKey"
+                        rules={[{ required: true, message: '请输入 API Key' }]}
+                        extra={
+                          p.keyUrl ? (
+                            <>
+                              前往{' '}
+                              <a href={p.keyUrl} target="_blank" rel="noreferrer">
+                                {p.keyUrl}
+                              </a>{' '}
+                              创建{p.keyPrefix ? `（格式形如 ${p.keyPrefix}）` : ''}，Key 仅保存在本机浏览器
+                            </>
+                          ) : (
+                            'Key 仅保存在本机浏览器'
+                          )
+                        }
+                      >
+                        <Input.Password placeholder="sk-..." autoComplete="new-password" />
+                      </Form.Item>
+                    )}
                     <Form.Item
-                      label="API Key"
-                      name="apiKey"
-                      rules={[{ required: true, message: '请输入 API Key' }]}
+                      label="模型"
+                      name="model"
                       extra={
-                        p.keyUrl ? (
-                          <>
-                            前往{' '}
-                            <a href={p.keyUrl} target="_blank" rel="noreferrer">
-                              {p.keyUrl}
-                            </a>{' '}
-                            创建{p.keyPrefix ? `（格式形如 ${p.keyPrefix}）` : ''}，Key 仅保存在本机浏览器
-                          </>
-                        ) : (
-                          'Key 仅保存在本机浏览器'
-                        )
+                        p.id === 'ollama'
+                          ? '模型名需与本机已下载的一致（终端运行 ollama list 查看）；Docker 部署时请确保 Ollama 正在本机运行'
+                          : p.id === 'lmstudio'
+                            ? '模型名需与 LM Studio 已加载并启动 Local Server 的模型一致'
+                            : '可直接输入服务商支持的其他模型名'
                       }
                     >
-                      <Input.Password placeholder="sk-..." autoComplete="new-password" />
-                    </Form.Item>
-                    <Form.Item label="模型" name="model" extra="可直接输入服务商支持的其他模型名">
                       <AutoComplete
                         options={(p.models || []).map((m) => ({ value: m }))}
                         placeholder={p.models[0] || '模型名称'}

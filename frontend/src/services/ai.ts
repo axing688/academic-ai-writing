@@ -16,6 +16,8 @@ export type AITask =
   | 'abstract'
   | 'gap'
   | 'defense'
+  | 'nature-polish'
+  | 'nature-review'
 
 export type ProviderKind = 'openai' | 'claude' | 'gemini'
 
@@ -30,6 +32,8 @@ export interface ProviderPreset {
   keyUrl?: string // 申请 API Key 的控制台地址
   keyPrefix?: string // Key 的常见前缀提示
   note?: string
+  noKey?: boolean // 本地推理服务无需 API Key
+  local?: boolean // 本机运行的推理服务（归入"本地 / 自定义端点"分组）
 }
 
 export const PROVIDERS: ProviderPreset[] = [
@@ -181,7 +185,32 @@ export const PROVIDERS: ProviderPreset[] = [
     proxyPath: '/llm/custom',
     baseUrl: '',
     models: [],
-    note: '填写任意 OpenAI 兼容服务的 Base URL（如 one-api、ollama 等）',
+    note: '填写任意 OpenAI 兼容服务的 Base URL（如 one-api、vLLM、llama.cpp server 等）',
+  },
+  // ---------- 本地推理（离线，无需 API Key）----------
+  {
+    id: 'ollama',
+    name: '本地模型（Ollama）',
+    region: '国内',
+    kind: 'openai',
+    proxyPath: '/llm/ollama',
+    baseUrl: 'http://localhost:11434/v1',
+    models: ['qwen2.5:7b', 'qwen3:8b', 'deepseek-r1:7b', 'glm4:9b', 'llama3.1:8b'],
+    noKey: true,
+    local: true,
+    note: '本机安装 Ollama 后执行：ollama serve 启动服务，ollama pull qwen2.5:7b 下载模型。模型名需与 ollama list 中一致。完全离线，数据不出本机',
+  },
+  {
+    id: 'lmstudio',
+    name: '本地模型（LM Studio）',
+    region: '国内',
+    kind: 'openai',
+    proxyPath: '/llm/lmstudio',
+    baseUrl: 'http://localhost:1234/v1',
+    models: ['qwen2.5-7b-instruct', 'deepseek-r1-distill-qwen-7b'],
+    noKey: true,
+    local: true,
+    note: '本机安装 LM Studio → 下载模型 → Developer 标签页启动 Local Server（默认端口 1234）。图形界面选模型，适合不想用命令行的场景',
   },
 ]
 
@@ -224,7 +253,11 @@ export function saveAISettings(s: AISettings) {
 }
 
 export function isAIConfigured(s: AISettings): boolean {
-  return s.providerId !== 'demo' && !!s.apiKey && providerBaseUrl(s) !== ''
+  if (s.providerId === 'demo') return false
+  if (providerBaseUrl(s) === '' && !(s.providerId === 'custom' && s.customBaseUrl)) return false
+  // 本地推理服务（Ollama / LM Studio）无需 API Key
+  if (getProvider(s.providerId)?.noKey) return true
+  return !!s.apiKey
 }
 
 export function providerBaseUrl(s: AISettings): string {
@@ -236,7 +269,8 @@ export function aiStatusText(s: AISettings): { label: string; ok: boolean } {
   if (s.providerId === 'demo') return { label: '演示模式', ok: false }
   const p = getProvider(s.providerId)
   if (!p) return { label: '未知服务商', ok: false }
-  if (!s.apiKey) return { label: `${p.name}（未填 Key）`, ok: false }
+  if (!s.apiKey && !p.noKey) return { label: `${p.name}（未填 Key）`, ok: false }
+  if (p.noKey && !s.model) return { label: `${p.name}（未选模型）`, ok: false }
   return { label: `${p.name} · ${s.model}`, ok: true }
 }
 
@@ -250,6 +284,8 @@ const TASK_LABEL: Record<AITask, string> = {
   abstract: '摘要生成',
   gap: '研究空白发现',
   defense: '预答辩演练',
+  'nature-polish': 'Nature 风格英文润色',
+  'nature-review': '期刊预审（模拟审稿）',
 }
 
 export function taskLabel(t: AITask): string {
@@ -275,6 +311,25 @@ const SYSTEM_PROMPTS: Record<AITask, string> = {
     '你是文献综述与研究设计专家。请基于给定的研究主题（以及提供的文献片段，如有），完成：1）用 3-5 句概括该方向现有研究的主要进展；2）识别 3-5 个尚未解决或研究不充分的研究空白（Research Gap），每条包含【空白描述】【现有研究为何未解决】【可能的突破方向】【与该主题的契合度：高/中/低】；3）最后给出"建议的研究切入点"一段。严禁编造具体文献，涉及文献时只使用提供的片段中真实存在的内容。',
   defense:
     '你是研究生学位论文答辩委员会评审专家。请针对给定的论文内容或章节，模拟答辩提问：1）提出 6-8 个评审最可能问到的问题，按【选题与价值】【研究方法】【数据与实证】【创新点与不足】四类组织；2）每个问题附 1-2 句回答要点提示，并标注风险等级（高风险/中风险/低风险）；3）最后给出答辩自述的 3 条注意事项。语气专业、问题尖锐但具有建设性。',
+  // ---- 以下两个任务的系统提示词改写自开源技能包 nature-skills（github.com/Yuan1z0825/nature-skills）----
+  // 的核心规范（nature-polishing / nature-reviewer），按本应用的交互形态精简
+  'nature-polish':
+    '你是 Nature 期刊资深编辑与学术英语润色专家。请将输入文本改写为符合 Nature 及其子刊表达习惯的英文，规则如下：\n' +
+    '1. 简洁有力：主动语态优先，删除空洞修饰词与冗余形容词，一句话只传递一个核心信息；\n' +
+    '2. 精确性：使用领域内标准术语；所有数值、单位、统计量必须原样保留，不得改写或省略；\n' +
+    '3. 证据强度：恰当使用 hedging（may、likely、suggest、appear to），严格区分"已证明"与"提示"两类陈述；\n' +
+    '4. 时态规范：方法与结果用过去时，普遍性结论与文献事实用现在时；\n' +
+    '5. 段落结构：一段只陈述一个论点，句间逻辑关系用衔接词显式化。\n' +
+    '若原文为中文则译写为英文；若已是英文则直接润色。\n' +
+    '输出格式：先输出改写后的英文全文，然后另起【主要修改说明】小节，用中文列出不超过 8 条主要修改点及理由。',
+  'nature-review':
+    '你是 Nature / CNS 级别期刊的互盲评审专家。请对给定的论文文本撰写一份正式评审报告（Reviewer Report），结构如下：\n' +
+    '1. Summary：3-5 句客观概括研究问题、方法与核心贡献，不带褒贬；\n' +
+    '2. Major Concerns：3-5 条重大问题，每条必须引用原文具体句子或段落作为定位，说明为何构成问题，并给出可操作的修改建议；\n' +
+    '3. Minor Issues：以列表指出排版、图表规范、术语一致性、参考文献格式等次要问题；\n' +
+    '4. Statistical & Methodological Rigor：评估方法与统计描述的严谨性（样本量依据、检验方法、效应量报告、混杂控制等，如适用）；\n' +
+    '5. Recommendation：给出 Accept / Minor Revision / Major Revision / Reject 之一，并用 1-2 句说明理由。\n' +
+    '要求：批评必须具体、可操作、对事不对人；文本中未提供的信息一律以"未见相关描述"指出，严禁虚构原文内容。',
 }
 
 // ---------------- 对外主入口 ----------------
@@ -312,7 +367,7 @@ export async function aiGenerate(
 export async function testConnection(settings: AISettings): Promise<string> {
   const p = getProvider(settings.providerId)
   if (!p) throw new Error('未知服务商')
-  if (!settings.apiKey) throw new Error('请先填写 API Key')
+  if (!settings.apiKey && !p.noKey) throw new Error('请先填写 API Key')
   const base = providerBaseUrl(settings)
   if (!base && settings.providerId === 'custom') throw new Error('请先填写 Base URL')
   const model = settings.model || p.models[0] || 'gpt-4o-mini'
@@ -341,7 +396,8 @@ async function callOpenAICompatible(
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
+      // 本地推理服务（Ollama 等）无需认证头，避免空 Bearer 触发部分服务的 401
+      ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
       'X-AWA-Target': base, // 自定义服务商时由代理读取（开发环境在 vite 插件中处理）
     },
     body: JSON.stringify({
@@ -696,6 +752,42 @@ function demoDefense(input: string): string {
 【说明】以上为演示引擎模拟生成；配置任一大模型 API Key 后，问题将针对你的真实论文内容定制，开启「文献辅助写作」还可让提问聚焦于你引用的文献。`
 }
 
+function demoNaturePolish(input: string): string {
+  const body = input.trim()
+  if (!body) return '（请先在左侧编辑器中输入或选中需要润色的内容）'
+  const sents = body.split(/(?<=[。！？.!?])\s*/).filter((s) => s.trim())
+  const preview = sents
+    .slice(0, 3)
+    .map((s, i) => `${i + 1}. "${s.trim().slice(0, 40)}${s.trim().length > 40 ? '…' : ''}" → 将译写为简洁、主动语态的 Nature 风格英文句`)
+    .join('\n')
+  return (
+    '【Nature 风格英文润色（演示）】\n\n' +
+    '演示引擎无法进行真实的翻译与润色。已分析输入文本（共 ' +
+    sents.length +
+    ' 句），将按以下规范处理：\n\n' +
+    preview +
+    '\n\n【应用规范】\n1. 主动语态优先，删除空洞修饰；\n2. 数值、单位、统计量原样保留；\n3. hedging 区分"已证明"与"提示"；\n4. 方法过去时、普遍结论现在时；\n5. 一段一论点，逻辑衔接显式化。\n\n' +
+    '【说明】以上为演示引擎的规则提示；配置任一大模型 API Key 或连接本地模型（Ollama）后，将输出真正的 Nature 风格英文全文。'
+  )
+}
+
+function demoNatureReview(input: string): string {
+  const body = input.trim()
+  if (!body) return '（请先在左侧编辑器中粘贴需要预审的论文内容）'
+  const sents = body.split(/(?<=[。！？.!?])\s*/).filter((s) => s.trim())
+  return (
+    `【模拟评审报告（演示）】针对所提供文本（共 ${sents.length} 句，约 ${countWordsLocal(body)} 字）\n\n` +
+    '1. Summary：演示引擎不会真正阅读语义。真实模型将在此客观概括研究问题、方法与核心贡献。\n\n' +
+    '2. Major Concerns（预置检查项，可在原文中自查）：\n' +
+    '   - 摘要中的结论是否有对应的结果数据支撑？\n' +
+    '   - 关键声明是否标注了统计方法与样本量依据？\n' +
+    '   - 因果性表述（"导致""证明"）是否超出了研究设计所能支持的范围？\n\n' +
+    '3. Minor Issues：检查术语一致性、图表编号连续性、参考文献格式统一。\n\n' +
+    '4. Recommendation：Major Revision（演示占位）。\n\n' +
+    '【说明】以上为演示引擎基于 nature-reviewer 技能规范的占位报告；配置大模型后将生成引用原文定位的真实评审报告。'
+  )
+}
+
 async function demoGenerate(
   task: AITask,
   input: string,
@@ -723,6 +815,10 @@ async function demoGenerate(
         return demoGap(input)
       case 'defense':
         return demoDefense(input)
+      case 'nature-polish':
+        return demoNaturePolish(input)
+      case 'nature-review':
+        return demoNatureReview(input)
     }
   })()
   if (citations?.length) {
