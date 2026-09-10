@@ -73,6 +73,45 @@ export function renameDoc(id: string, title: string): void {
 
 export function deleteDoc(id: string): void {
   writeAll(readAll().filter((d) => d.id !== id))
+  recordDeleted([id])
+}
+
+// ---------------- 删除标记（tombstone）----------------
+// 记录"本地已删除的文档 id"，同步时据此删除云端副本，
+// 防止已删文档在下次同步时被云端重新拉回本地
+
+const DELETED_KEY = 'awa_deleted_docs'
+const MAX_TOMBSTONES = 500
+
+export function getDeletedIds(): string[] {
+  try {
+    const raw = localStorage.getItem(DELETED_KEY)
+    const list = raw ? JSON.parse(raw) : []
+    return Array.isArray(list) ? list.filter((x) => typeof x === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+export function recordDeleted(ids: string[]): void {
+  if (!ids.length) return
+  const merged = [...new Set([...getDeletedIds(), ...ids])].slice(-MAX_TOMBSTONES)
+  try {
+    localStorage.setItem(DELETED_KEY, JSON.stringify(merged))
+  } catch {
+    /* 标记写失败不影响本地删除本身 */
+  }
+}
+
+export function clearDeletedIds(ids: string[]): void {
+  if (!ids.length) return
+  const remove = new Set(ids)
+  const rest = getDeletedIds().filter((id) => !remove.has(id))
+  try {
+    localStorage.setItem(DELETED_KEY, JSON.stringify(rest))
+  } catch {
+    /* 忽略 */
+  }
 }
 
 export function countWords(text: string): number {

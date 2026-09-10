@@ -11,7 +11,7 @@
 //  · 写回 localStorage 前检查体量，超限时报错而不是抛出未捕获异常
 
 import { getToken } from './auth'
-import { readRaw, writeRaw, type Doc } from './storage'
+import { clearDeletedIds, getDeletedIds, readRaw, writeRaw, type Doc } from './storage'
 
 export interface SyncResult {
   ok: boolean
@@ -106,6 +106,26 @@ async function doSync(): Promise<SyncResult> {
     remoteMap.set(ld.id, ld)
   }
 
+  // 删除标记（tombstone）：本地已删除的文档，把云端副本一并删除，
+  // 否则已删文档会在下次同步时被云端重新拉回本地（"删不掉"）
+  const tombstones = getDeletedIds()
+  const tombstoneSet = new Set(tombstones)
+  if (tombstones.length) {
+    for (const id of tombstones) {
+      if (!remoteMap.has(id)) continue
+      try {
+        const resp = await api(`/api/documents/${id}`, { method: 'DELETE' })
+        if (resp.ok || resp.status === 404) {
+          remoteMap.delete(id) // 云端已删除，本地的删除决定生效
+        }
+      } catch {
+        // 删除失败则保留标记，下次同步重试
+      }
+    }
+    // 标记处理完即清理（云端仍在、删除失败的保留以便重试）
+    clearDeletedIds(tombstones.filter((id) => !remoteMap.has(id)))
+  }
+
   // 内容级去重：同一篇文档因历史事故在云端/本地存在不同 id 的副本时，
   // 以云端为准、丢弃本地重复副本，避免每次同步都重复推送一份。
   // 仅对"有正文"或"非默认标题"的文档生效，避免误合并多个空白草稿。
@@ -130,6 +150,7 @@ async function doSync(): Promise<SyncResult> {
   }
   let pulled = 0
   for (const [id, rd] of remoteMap) {
+    if (tombstoneSet.has(id)) continue // 本地已决定删除（云端删除失败待重试），不拉回
     const existing = merged.get(id)
     if (!existing) {
       merged.set(id, rd)

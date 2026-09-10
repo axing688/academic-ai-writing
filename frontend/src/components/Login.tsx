@@ -55,7 +55,7 @@ const Login: React.FC<Props> = ({ onAuthed, onSkip }) => {
 
   const registerForm = (
     <Form onFinish={handleRegister} layout="vertical" requiredMark={false}>
-      <Form.Item name="username" rules={[{ required: true, min: 3, max: 32, message: '用户名 3-32 个字符' }]}>
+      <Form.Item name="username" rules={[{ required: true, min: 2, max: 32, message: '用户名 2-32 个字符' }]}>
         <Input prefix={<UserOutlined />} placeholder="用户名" size="large" />
       </Form.Item>
       <Form.Item name="email" rules={[{ required: true, type: 'email', message: '请输入有效邮箱' }]}>

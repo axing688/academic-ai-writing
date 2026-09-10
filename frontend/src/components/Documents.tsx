@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Button, Empty, Input, List, message, Modal, Popconfirm, Space, Tag, Typography } from 'antd'
+import { Button, Checkbox, Empty, Input, List, message, Modal, Popconfirm, Space, Tag, Typography } from 'antd'
 import { DeleteOutlined, EditOutlined, FileAddOutlined, FileTextOutlined } from '@ant-design/icons'
 import { countWords, createDoc, deleteDoc, listDocs, renameDoc, type Doc } from '../services/storage'
 
@@ -15,10 +15,17 @@ const Documents: React.FC<Props> = ({ onOpenInWorkspace, refreshKey }) => {
   const [renameOpen, setRenameOpen] = useState(false)
   const [renameTarget, setRenameTarget] = useState<Doc | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  const [selected, setSelected] = useState<Set<string>>(new Set())
 
-  // refreshKey 变化时重新加载
+  // refreshKey 变化时重新加载，并清掉已不存在的选中项
   React.useEffect(() => {
-    setDocs(listDocs())
+    const next = listDocs()
+    setDocs(next)
+    setSelected((prev) => {
+      const ids = new Set(next.map((d) => d.id))
+      const kept = new Set([...prev].filter((id) => ids.has(id)))
+      return kept.size === prev.size ? prev : kept
+    })
   }, [refreshKey])
 
   function handleCreate() {
@@ -31,7 +38,38 @@ const Documents: React.FC<Props> = ({ onOpenInWorkspace, refreshKey }) => {
   function handleDelete(id: string) {
     deleteDoc(id)
     setDocs(listDocs())
+    setSelected((prev) => {
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
     message.success('已删除')
+  }
+
+  // ---------- 批量选择 / 批量删除 ----------
+  const allSelected = docs.length > 0 && selected.size === docs.length
+  const someSelected = selected.size > 0 && selected.size < docs.length
+
+  function toggleOne(id: string, checked: boolean) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (checked) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }
+
+  function toggleAll(checked: boolean) {
+    setSelected(checked ? new Set(docs.map((d) => d.id)) : new Set())
+  }
+
+  function handleBatchDelete() {
+    const ids = [...selected]
+    if (!ids.length) return
+    for (const id of ids) deleteDoc(id)
+    setDocs(listDocs())
+    setSelected(new Set())
+    message.success(`已批量删除 ${ids.length} 篇文档`)
   }
 
   function openRename(d: Doc) {
@@ -51,10 +89,33 @@ const Documents: React.FC<Props> = ({ onOpenInWorkspace, refreshKey }) => {
 
   return (
     <div>
-      <Space style={{ marginBottom: 16 }}>
+      <Space style={{ marginBottom: 16 }} size="middle" wrap>
         <Button type="primary" icon={<FileAddOutlined />} onClick={handleCreate}>
           新建文档
         </Button>
+        <Checkbox
+          checked={allSelected}
+          indeterminate={someSelected}
+          disabled={!docs.length}
+          onChange={(e) => toggleAll(e.target.checked)}
+        >
+          全选
+        </Checkbox>
+        <Popconfirm
+          title={`确认删除选中的 ${selected.size} 篇文档？`}
+          description="删除后不可恢复（云端副本会在下次同步时一并删除）。"
+          disabled={!selected.size}
+          onConfirm={handleBatchDelete}
+        >
+          <Button danger icon={<DeleteOutlined />} disabled={!selected.size}>
+            批量删除{selected.size ? `（${selected.size}）` : ''}
+          </Button>
+        </Popconfirm>
+        {selected.size > 0 && (
+          <Button type="text" onClick={() => setSelected(new Set())}>
+            取消选择
+          </Button>
+        )}
         <Text type="secondary">共 {docs.length} 篇 · 数据保存在浏览器本地</Text>
       </Space>
       <div className="glass" style={{ padding: 18 }}>
@@ -67,7 +128,14 @@ const Documents: React.FC<Props> = ({ onOpenInWorkspace, refreshKey }) => {
             renderItem={(d) => (
               <List.Item
                 className="doc-row"
+                style={selected.has(d.id) ? { background: 'rgba(99, 102, 241, 0.08)', borderRadius: 10 } : undefined}
                 actions={[
+                  <Checkbox
+                    key="sel"
+                    checked={selected.has(d.id)}
+                    onChange={(e) => toggleOne(d.id, e.target.checked)}
+                    onClick={(e) => e.stopPropagation()}
+                  />,
                   <Button key="open" type="link" icon={<EditOutlined />} onClick={() => onOpenInWorkspace(d.id)}>
                     打开
                   </Button>,
