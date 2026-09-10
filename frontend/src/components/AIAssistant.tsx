@@ -1,11 +1,15 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import {
   Button,
   Col,
   Divider,
+  Drawer,
+  Empty,
   Input,
   InputNumber,
+  List,
   message,
+  Popconfirm,
   Row,
   Select,
   Space,
@@ -20,7 +24,9 @@ import {
   ClearOutlined,
   CopyOutlined,
   FileAddOutlined,
+  HistoryOutlined,
   LoadingOutlined,
+  RedoOutlined,
   SafetyCertificateOutlined,
   SendOutlined,
   SnippetsOutlined,
@@ -28,7 +34,18 @@ import {
   WarningOutlined,
 } from '@ant-design/icons'
 import { aiGenerate, aiStatusText, loadAISettings, taskLabel, type AITask, type AISettings } from '../services/ai'
-import { countWords, createDoc, getDoc, listDocs, updateDoc, type Doc } from '../services/storage'
+import {
+  countWords,
+  createDoc,
+  deleteVersion,
+  getDoc,
+  listDocs,
+  listVersions,
+  restoreVersion,
+  updateDoc,
+  type Doc,
+  type DocVersion,
+} from '../services/storage'
 import { buildRagContext, listLits } from '../services/library'
 import { getCurrentProfile, profileToPrompt } from '../services/style'
 import { extractRefEntries, refCheckSummary, verifyReferences, type RefCheck } from '../services/citation'
@@ -36,16 +53,26 @@ import { extractRefEntries, refCheckSummary, verifyReferences, type RefCheck } f
 const { TextArea } = Input
 const { Paragraph, Text } = Typography
 
+/** 把 AI 生成结果按空行切分为可独立编辑/重新生成的段落 */
+function splitSegments(text: string): string[] {
+  return text
+    .split(/\n{2,}/)
+    .map((s) => s.replace(/^\n+|\n+$/g, ''))
+    .filter((s) => s.trim())
+}
+
 const WRITE_TASKS: Array<{ key: AITask; desc: string }> = [
   { key: 'outline', desc: '输入研究主题，生成完整论文大纲' },
   { key: 'topics', desc: '输入学科方向，推荐 5 个候选选题' },
   { key: 'gap', desc: '基于主题与文献库，识别未解决的研究空白' },
   { key: 'polish', desc: '将选中/全文改写为规范学术语言' },
+  { key: 'nature-polish', desc: '将选中/全文译写为 Nature 风格英文（源自 nature-skills 规范）' },
   { key: 'expand', desc: '对正文按目标字数进行充实扩写' },
   { key: 'rewrite', desc: '同义改写降重，保持原意不变' },
   { key: 'grammar', desc: '检查语法、标点与学术规范问题' },
   { key: 'abstract', desc: '按四段式生成中文摘要与关键词' },
   { key: 'defense', desc: '模拟评审提问，提前演练学位论文答辩' },
+  { key: 'nature-review', desc: '模拟 Nature/CNS 审稿人，生成正式评审报告（源自 nature-skills 规范）' },
 ]
 
 interface Props {
@@ -63,6 +90,8 @@ const AIAssistant: React.FC<Props> = ({ openDocId, openNonce = 0, onDocsChanged 
   const [topic, setTopic] = useState('')
   const [targetWords, setTargetWords] = useState(400)
   const [result, setResult] = useState('')
+  const [segments, setSegments] = useState<string[]>([]) // 可编辑的生成结果分段
+  const [segLoading, setSegLoading] = useState<number | null>(null) // 正在重新生成的分段下标
   const [loading, setLoading] = useState(false)
   const [settings] = useState<AISettings>(() => loadAISettings())
   // RAG 文献辅助
@@ -76,6 +105,20 @@ const AIAssistant: React.FC<Props> = ({ openDocId, openNonce = 0, onDocsChanged 
   // 导师风格注入
   const [styleName, setStyleName] = useState<string>('')
   const [styleOn, setStyleOn] = useState<boolean>(() => localStorage.getItem('awa_style_on') === '1')
+  // 历史版本侧栏
+  const [histOpen, setHistOpen] = useState(false)
+  const [versions, setVersions] = useState<DocVersion[]>([])
+
+  // 始终指向最新的编辑器状态（供卸载/切换前的兜底保存读取，避免闭包拿到旧值）
+  const latestRef = useRef({ currentId, title, content })
+  latestRef.current = { currentId, title, content }
+  // 记录"已加载/已保存"的快照：打开或切换文档后内容未变化时不触发保存，
+  // 防止防抖副作用把上一个文档的内容误写进新文档
+  const loadedRef = useRef<{ id: string | null; title: string; content: string }>({ id: null, title: '', content: '' })
+
+  function markLoaded(id: string | null, t: string, c: string) {
+    loadedRef.current = { id, title: t, content: c }
+  }
 
   useEffect(() => {
     refreshDocs()
@@ -90,6 +133,7 @@ const AIAssistant: React.FC<Props> = ({ openDocId, openNonce = 0, onDocsChanged 
     if (openDocId) {
       const d = getDoc(openDocId)
       if (d) {
+        markLoaded(d.id, d.title, d.content)
         setCurrentId(d.id)
         setTitle(d.title)
         setContent(d.content)
@@ -106,28 +150,89 @@ const AIAssistant: React.FC<Props> = ({ openDocId, openNonce = 0, onDocsChanged 
   function openDoc(id: string) {
     const d = docs.find((x) => x.id === id)
     if (!d) return
+    markLoaded(d.id, d.title, d.content)
     setCurrentId(d.id)
     setTitle(d.title)
     setContent(d.content)
   }
 
-  function newDraft() {
-    const d = createDoc('未命名草稿', '')
-    refreshDocs()
-    openDoc(d.id)
-    message.success('已创建新草稿')
+  // 立即保存当前文档（新建/切换文档前调用，不再依赖防抖）
+  function flushSave() {
+    const { currentId: cid, title: t, content: c } = latestRef.current
+    if (!cid) return
+    const snap = loadedRef.current
+    if (snap.id === cid && snap.title === t && snap.content === c) return
+    updateDoc(cid, { title: t, content: c })
+    markLoaded(cid, t, c)
   }
 
-  // 防抖自动保存
+  function newDraft() {
+    // 先把当前文档强制落盘，再创建并跳转到新文档（测试反馈问题 8）
+    flushSave()
+    const d = createDoc('未命名草稿', '')
+    markLoaded(d.id, d.title, d.content)
+    setCurrentId(d.id)
+    setTitle(d.title)
+    setContent(d.content)
+    refreshDocs()
+    message.success('当前文档已保存，已创建新草稿')
+  }
+
+  // 防抖自动保存（内容相对已加载快照有变化时才保存）
   useEffect(() => {
     if (!currentId) return
+    const snap = loadedRef.current
+    if (snap.id === currentId && snap.title === title && snap.content === content) return
     const t = setTimeout(() => {
       updateDoc(currentId, { title, content })
+      markLoaded(currentId, title, content)
       refreshDocs()
     }, 800)
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [title, content, currentId])
+
+  // 组件卸载（如页面切换）前兜底保存一次，防止防抖定时器被清理导致丢内容
+  useEffect(() => {
+    return () => {
+      const { currentId: cid, title: t, content: c } = latestRef.current
+      if (!cid) return
+      const snap = loadedRef.current
+      if (snap.id === cid && snap.title === t && snap.content === c) return
+      updateDoc(cid, { title: t, content: c })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // ---------- 历史版本 ----------
+  function refreshVersions() {
+    setVersions(latestRef.current.currentId ? listVersions(latestRef.current.currentId) : [])
+  }
+
+  function handleRestoreVersion(at: number) {
+    const cid = latestRef.current.currentId
+    if (!cid) return
+    if (!restoreVersion(cid, at)) {
+      message.error('回滚失败：版本不存在')
+      return
+    }
+    const d = getDoc(cid)
+    if (d) {
+      markLoaded(d.id, d.title, d.content)
+      setTitle(d.title)
+      setContent(d.content)
+    }
+    refreshVersions()
+    refreshDocs()
+    message.success('已回滚到该版本（回滚前的内容已另存为快照）')
+  }
+
+  function handleDeleteVersion(at: number) {
+    const cid = latestRef.current.currentId
+    if (!cid) return
+    deleteVersion(cid, at)
+    refreshVersions()
+  }
 
   const selectionText = (() => {
     const el = document.getElementById('awa-editor') as HTMLTextAreaElement | null
@@ -193,19 +298,66 @@ const AIAssistant: React.FC<Props> = ({ openDocId, openNonce = 0, onDocsChanged 
         style: styleOn ? (getCurrentProfile() ? profileToPrompt(getCurrentProfile()!) : undefined) : undefined,
       })
       setResult(res)
+      setSegments(splitSegments(res))
       // 生成完成后自动校验引用真实性（不阻塞主结果展示）
       runRefCheck(res)
     } catch (e) {
       message.error((e as Error).message || 'AI 生成失败，请检查网络或 API Key')
       setResult('')
+      setSegments([])
     } finally {
       setLoading(false)
     }
   }
 
+  // 分段视图下合并后的完整结果（分段可编辑，插入/复制取最新内容）
+  const resultText = segments.length ? segments.join('\n\n') : result
+
+  /** 对单个分段重新生成（测试反馈问题 1） */
+  async function regenSegment(idx: number) {
+    const baseInput = inputForTask()
+    if (!baseInput) {
+      message.warning('请先输入研究主题，或在编辑器提供内容')
+      return
+    }
+    setSegLoading(idx)
+    try {
+      const input = `${baseInput}\n\n【任务】整体内容已完成，只需重新生成下面这一部分。直接输出该部分的新内容，不要输出其他部分或额外说明：\n${segments[idx]}`
+      const res = await aiGenerate(task, input, settings, {
+        targetWords,
+        style: styleOn ? (getCurrentProfile() ? profileToPrompt(getCurrentProfile()!) : undefined) : undefined,
+      })
+      const replacement = splitSegments(res).join('\n\n') || segments[idx]
+      setSegments((prev) => prev.map((s, i) => (i === idx ? replacement : s)))
+      message.success('该段已重新生成')
+    } catch (e) {
+      message.error((e as Error).message || '重新生成失败，请检查网络或 API Key')
+    } finally {
+      setSegLoading(null)
+    }
+  }
+
+  /** 把单个分段插入正文 */
+  function insertSegment(seg: string) {
+    if (!seg.trim()) return
+    if (currentId) updateDoc(currentId, { title, content }, { snapshot: true }) // 插入前存快照，可从历史版本找回
+    const el = document.getElementById('awa-editor') as HTMLTextAreaElement | null
+    if (el && selectionText) {
+      const start = el.selectionStart
+      const end = el.selectionEnd
+      setContent(content.slice(0, start) + seg + content.slice(end))
+    } else if (content.trim()) {
+      setContent(content + '\n\n' + seg)
+    } else {
+      setContent(seg)
+    }
+    message.success('该段已插入正文')
+  }
+
   function insertResult() {
-    if (!result) return
-    const body = result.replace(/^【[^】]*】\s*\n*/m, '')
+    if (!resultText) return
+    const body = resultText.replace(/^【[^】]*】\s*\n*/m, '')
+    if (currentId) updateDoc(currentId, { title, content }, { snapshot: true }) // 插入前存快照，可从历史版本找回
     const el = document.getElementById('awa-editor') as HTMLTextAreaElement | null
     if (el && selectionText) {
       const start = el.selectionStart
@@ -220,9 +372,9 @@ const AIAssistant: React.FC<Props> = ({ openDocId, openNonce = 0, onDocsChanged 
   }
 
   async function copyResult() {
-    if (!result) return
+    if (!resultText) return
     try {
-      await navigator.clipboard.writeText(result)
+      await navigator.clipboard.writeText(resultText)
       message.success('已复制')
     } catch {
       message.error('复制失败，请手动选择复制')
@@ -254,6 +406,16 @@ const AIAssistant: React.FC<Props> = ({ openDocId, openNonce = 0, onDocsChanged 
               />
               <Button icon={<FileAddOutlined />} onClick={newDraft}>
                 新建
+              </Button>
+              <Button
+                icon={<HistoryOutlined />}
+                disabled={!currentId}
+                onClick={() => {
+                  refreshVersions()
+                  setHistOpen(true)
+                }}
+              >
+                历史版本
               </Button>
             </Space>
             <Space>
@@ -422,7 +584,7 @@ const AIAssistant: React.FC<Props> = ({ openDocId, openNonce = 0, onDocsChanged 
                       生成{taskLabel(task)}结果
                     </Button>
 
-                    {result && (
+                    {resultText && (
                       <>
                         <Divider style={{ margin: '8px 0' }} />
                         <Space style={{ marginBottom: 8 }}>
@@ -432,13 +594,63 @@ const AIAssistant: React.FC<Props> = ({ openDocId, openNonce = 0, onDocsChanged 
                           <Button size="small" icon={<CopyOutlined />} onClick={copyResult}>
                             复制
                           </Button>
-                          <Button size="small" icon={<ClearOutlined />} onClick={() => setResult('')}>
+                          <Button
+                            size="small"
+                            icon={<ClearOutlined />}
+                            onClick={() => {
+                              setResult('')
+                              setSegments([])
+                            }}
+                          >
                             清除
                           </Button>
+                          <Text type="secondary" style={{ fontSize: 11 }}>
+                            每段可直接编辑，或单独重新生成
+                          </Text>
                         </Space>
-                        <div className="ai-result-box">
-                          {result}
-                        </div>
+                        {/* 分段可编辑结果（测试反馈问题 1：支持直接编辑 + 按段重新生成） */}
+                        {segments.length > 0 ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            {segments.map((seg, i) => (
+                              <div
+                                key={i}
+                                className="ai-result-box"
+                                style={{ padding: '10px 12px', borderRadius: 10 }}
+                              >
+                                <TextArea
+                                  value={seg}
+                                  onChange={(e) =>
+                                    setSegments((prev) => prev.map((s, j) => (j === i ? e.target.value : s)))
+                                  }
+                                  autoSize={{ minRows: 2 }}
+                                  variant="borderless"
+                                  style={{ padding: 0, fontSize: 13.5, lineHeight: 1.9, background: 'transparent' }}
+                                />
+                                <Space size={2} style={{ marginTop: 6 }}>
+                                  <Button
+                                    size="small"
+                                    type="text"
+                                    icon={<RedoOutlined />}
+                                    loading={segLoading === i}
+                                    onClick={() => regenSegment(i)}
+                                  >
+                                    重新生成本段
+                                  </Button>
+                                  <Button
+                                    size="small"
+                                    type="text"
+                                    icon={<SnippetsOutlined />}
+                                    onClick={() => insertSegment(seg)}
+                                  >
+                                    插入本段
+                                  </Button>
+                                </Space>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="ai-result-box">{result}</div>
+                        )}
                         {ragCitations.length > 0 && (
                           <div className="glass-inset" style={{ padding: '10px 12px', borderRadius: 10, marginTop: 8 }}>
                             <Space size={6} style={{ marginBottom: 4 }}>
@@ -554,6 +766,57 @@ const AIAssistant: React.FC<Props> = ({ openDocId, openNonce = 0, onDocsChanged 
           />
         </div>
       </Col>
+
+      {/* 历史版本侧栏（测试反馈问题 7：多次生成/修改后旧内容可找回） */}
+      <Drawer
+        title="历史版本（最近 20 次重要修改）"
+        width={440}
+        open={histOpen}
+        onClose={() => setHistOpen(false)}
+      >
+        {versions.length === 0 ? (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description="暂无历史版本。AI 结果插入正文或大幅修改时，会自动保留修改前的快照。"
+          />
+        ) : (
+          <List
+            dataSource={[...versions].reverse()}
+            renderItem={(v) => (
+              <List.Item
+                className="glass-inset"
+                style={{ borderRadius: 10, padding: '10px 14px', marginBottom: 8, border: 'none' }}
+                actions={[
+                  <Popconfirm
+                    key="restore"
+                    title="回滚到该版本？"
+                    description="回滚前的当前内容会先另存为快照，可再次找回。"
+                    onConfirm={() => handleRestoreVersion(v.at)}
+                  >
+                    <Button key="r" size="small" type="primary" ghost>
+                      回滚
+                    </Button>
+                  </Popconfirm>,
+                  <Popconfirm key="del" title="删除该快照？" onConfirm={() => handleDeleteVersion(v.at)}>
+                    <Button key="d" size="small" type="text" danger>
+                      删除
+                    </Button>
+                  </Popconfirm>,
+                ]}
+              >
+                <List.Item.Meta
+                  title={<Text strong style={{ fontSize: 13 }}>{new Date(v.at).toLocaleString('zh-CN')}</Text>}
+                  description={
+                    <Text type="secondary" style={{ fontSize: 12 }} ellipsis>
+                      《{v.title}》 · {countWords(v.content)} 字 · {v.content.slice(0, 40).replace(/\n/g, ' ')}…
+                    </Text>
+                  }
+                />
+              </List.Item>
+            )}
+          />
+        )}
+      </Drawer>
     </Row>
   )
 }

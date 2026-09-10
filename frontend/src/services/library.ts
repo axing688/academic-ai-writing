@@ -212,11 +212,21 @@ export async function extractPdf(
     pdf = await loadingTask.promise
   } catch (e) {
     const detail = e instanceof Error ? e.message : String(e)
-    throw new Error(
-      /password/i.test(detail)
-        ? '该 PDF 已加密，暂不支持导入'
-        : `无法打开 PDF 文件（可能已损坏或不是有效 PDF）：${detail}`
-    )
+    if (/password/i.test(detail)) {
+      throw new Error('该 PDF 已加密，暂不支持导入')
+    }
+    // cMap 走 CDN，网络不佳时中文 PDF 打开会失败——去掉 cMap 重试一次（按内嵌字体尽力解析）
+    try {
+      loadingTask = pdfjs.getDocument({ data: buf })
+      pdf = await loadingTask.promise
+    } catch (e2) {
+      const detail2 = e2 instanceof Error ? e2.message : String(e2)
+      throw new Error(
+        /password/i.test(detail2)
+          ? '该 PDF 已加密，暂不支持导入'
+          : `无法打开 PDF 文件（可能已损坏或不是有效 PDF）：${detail2 || detail}`
+      )
+    }
   }
   const pages: string[] = []
   for (let i = 1; i <= pdf.numPages; i++) {
@@ -257,6 +267,27 @@ export async function extractPdf(
 }
 
 // ---------------- 文献导入 ----------------
+
+function normTitle(s: string): string {
+  return (s || '').toLowerCase().replace(/\s+/g, '').replace(/[《》「」""''。，,．.：:;；!！?？()（）\-—_]/g, '')
+}
+
+/** 查重：优先按 DOI 匹配，其次按标题（忽略空白与标点） */
+export async function findDuplicate(meta: { doi?: string; title: string }): Promise<Literature | undefined> {
+  const lits = await listLits()
+  const doi = meta.doi?.toLowerCase()
+  if (doi) {
+    const d = lits.find((l) => l.doi && l.doi.toLowerCase() === doi)
+    if (d) return d
+  }
+  const t = normTitle(meta.title)
+  if (t.length >= 6) return lits.find((l) => normTitle(l.title) === t)
+  return undefined
+}
+
+function dupError(dup: Literature): Error {
+  return new Error(`重复导入：文献库已有《${dup.title.slice(0, 40)}》，如需重新导入请先删除原文献`)
+}
 
 /** 从 PDF 文件名推断元数据："张三等-2023-基于深度学习的XX研究.pdf" */
 function guessMetaFromPdf(file: File, text: string): Partial<Literature> {
@@ -300,11 +331,46 @@ export async function importPdf(
   onProgress?: (ratio: number, msg: string) => void
 ): Promise<Literature> {
   onProgress?.(0.03, '打开 PDF…')
-  const { pages, fullText } = await extractPdf(file, (r, numPages) =>
-    onProgress?.(0.05 + r * 0.75, `抽取文本：第 ${Math.ceil(r * numPages)} / ${numPages} 页`)
-  )
+  let pages: string[] = []
+  let fullText = ''
+  try {
+    const r = await extractPdf(file, (r, numPages) =>
+      onProgress?.(0.05 + r * 0.75, `抽取文本：第 ${Math.ceil(r * numPages)} / ${numPages} 页`)
+    )
+    pages = r.pages
+    fullText = r.fullText
+  } catch (e) {
+    // 中文 PDF 的 CID 编码需要 cMap（目前走 CDN），网络不佳时打开会失败——降级为仅存元数据，不阻断导入
+    onProgress?.(0.5, '文本抽取失败，降级为仅保存元数据…')
+    pages = []
+    fullText = ''
+    console.warn('PDF 文本抽取失败，降级为元数据导入：', e)
+  }
   if (fullText.replace(/\s/g, '').length < 100) {
-    throw new Error('未能从 PDF 中抽取到足够文本（可能是扫描版 PDF，暂不支持 OCR）')
+    // 扫描版 / 加密外壳 / cMap 缺失：降级为仅保存元数据（不建检索索引），而不是直接报错
+    const meta = guessMetaFromPdf(file, '')
+    const lit: Literature = {
+      id: uid(),
+      title: meta.title || file.name,
+      authors: meta.authors || [],
+      year: meta.year ?? new Date().getFullYear(),
+      venue: '',
+      type: 'journal',
+      abstract: '',
+      source: 'pdf',
+      fileName: file.name,
+      charCount: 0,
+      chunkCount: 0,
+      addedAt: Date.now(),
+    }
+    const dup = await findDuplicate({ title: lit.title })
+    if (dup) throw dupError(dup)
+    const db = await openDB()
+    const tx = db.transaction(STORE_LITS, 'readwrite')
+    tx.objectStore(STORE_LITS).put(lit)
+    await txDone(tx)
+    onProgress?.(1, '完成（未能抽取正文，仅保存元数据）')
+    return lit
   }
   const meta = guessMetaFromPdf(file, pages[0] || fullText)
   onProgress?.(0.85, '建立检索索引…')
@@ -322,6 +388,8 @@ export async function importPdf(
     chunkCount: 0,
     addedAt: Date.now(),
   }
+  const dup = await findDuplicate({ title: lit.title })
+  if (dup) throw dupError(dup)
   const chunks = chunkText(pages.flatMap((p) => p.split(/\n{2,}/).map((t) => t.trim())).join('\n\n'))
   lit.chunkCount = chunks.length
   const db = await openDB()
@@ -359,10 +427,11 @@ export async function importManual(meta: Omit<Literature, 'id' | 'charCount' | '
 }
 
 /** 批量导入 BibTeX（解析 @type{key, title=..., author=..., year=..., journal/booktitle=...}） */
-export async function importBibtex(text: string): Promise<{ ok: number; fail: number }> {
+export async function importBibtex(text: string): Promise<{ ok: number; fail: number; dup: number }> {
   const entries = text.split(/(?=@\w+\s*\{)/).filter((e) => /@\w+\s*\{/.test(e))
   let ok = 0
   let fail = 0
+  let dup = 0
   for (const raw of entries) {
     try {
       const typeM = raw.match(/@(\w+)\s*\{/)
@@ -413,11 +482,13 @@ export async function importBibtex(text: string): Promise<{ ok: number; fail: nu
         bodyText: fields.abstract || '',
       })
       ok++
-    } catch {
-      fail++
+    } catch (e) {
+      // 重复导入单独计数，不计为失败
+      if (e instanceof Error && e.message.startsWith('重复导入')) dup++
+      else fail++
     }
   }
-  return { ok, fail }
+  return { ok, fail, dup }
 }
 
 // ---------------- DOI 导入（CrossRef，浏览器直连免费 API）----------------
@@ -506,7 +577,7 @@ async function crFetchJson(url: string): Promise<any> {
   } catch (e) {
     throw new Error('无法连接 CrossRef 服务，请检查网络（该功能需联网）')
   }
-  if (r.status === 404) throw new Error('未找到该 DOI，请确认输入是否正确')
+  if (r.status === 404) throw new Error('未找到该 DOI：请确认输入是否正确（中文文献常未被 CrossRef 收录，可改用 PDF 上传或手工录入）')
   if (!r.ok) throw new Error(`CrossRef 服务返回错误（HTTP ${r.status}），请稍后重试`)
   return r.json()
 }

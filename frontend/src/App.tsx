@@ -134,13 +134,14 @@ const App: React.FC = () => {
         </Header>
         <Content className="main-content">
           {page === 'dashboard' && <Dashboard onNavigate={setPage} />}
-          {page === 'ai-assistant' && (
+          {/* AI 工作台始终挂载，切走时仅隐藏：切换左侧目录不再导致生成结果/编辑内容丢失后重新加载（测试反馈问题 6） */}
+          <div style={{ display: page === 'ai-assistant' ? 'block' : 'none' }}>
             <AIAssistant
               openDocId={openDocId}
               openNonce={openNonce}
               onDocsChanged={() => setDocsVersion((v) => v + 1)}
             />
-          )}
+          </div>
           {page === 'library' && <Library />}
           {page === 'style' && <StyleProfilePage />}
           {page === 'documents' && (

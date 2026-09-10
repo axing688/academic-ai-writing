@@ -201,11 +201,18 @@ const Library: React.FC = () => {
   // ---------- BibTeX ----------
   async function handleBibtexImport() {
     if (!bibtexText.trim()) return
-    const r = await importBibtex(bibtexText)
-    message.success(`BibTeX 导入完成：成功 ${r.ok} 条，失败 ${r.fail} 条`)
-    setBibtexOpen(false)
-    setBibtexText('')
-    await refresh()
+    try {
+      const r = await importBibtex(bibtexText)
+      const parts = [`成功 ${r.ok} 条`]
+      if (r.dup) parts.push(`跳过重复 ${r.dup} 条`)
+      if (r.fail) parts.push(`失败 ${r.fail} 条`)
+      message.success(`BibTeX 导入完成：${parts.join('，')}`)
+      setBibtexOpen(false)
+      setBibtexText('')
+      await refresh()
+    } catch (e) {
+      message.error(`导入失败：${e instanceof Error ? e.message : String(e)}`)
+    }
   }
 
   // ---------- 检索测试 ----------
@@ -243,8 +250,12 @@ const Library: React.FC = () => {
   }
 
   async function handleDelete(id: string) {
-    await deleteLit(id)
-    message.success('已删除')
+    try {
+      await deleteLit(id)
+      message.success('已删除')
+    } catch (e) {
+      message.error(`删除失败：${e instanceof Error ? e.message : String(e)}`)
+    }
     await refresh()
   }
 

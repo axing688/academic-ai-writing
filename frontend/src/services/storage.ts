@@ -1,15 +1,23 @@
 // 文档本地存储服务（localStorage 持久化）
 // 后端在线时可通过 api 层切换，这里先提供纯前端可用实现
 
+export interface DocVersion {
+  at: number // 快照时间（即被快照内容当时的 updatedAt）
+  title: string
+  content: string
+}
+
 export interface Doc {
   id: string
   title: string
   content: string
   createdAt: number
   updatedAt: number
+  versions?: DocVersion[] // 历史版本快照（旧的在前，最多保留 MAX_VERSIONS 条）
 }
 
 const STORAGE_KEY = 'awa_documents'
+const MAX_VERSIONS = 20
 
 function readAll(): Doc[] {
   try {
@@ -58,11 +66,63 @@ export function createDoc(title = '未命名文档', content = ''): Doc {
   return doc
 }
 
-export function updateDoc(id: string, patch: Partial<Pick<Doc, 'title' | 'content'>>): void {
+export function updateDoc(
+  id: string,
+  patch: Partial<Pick<Doc, 'title' | 'content'>>,
+  opts?: { snapshot?: boolean } // snapshot=true 时把覆盖前的内容存入历史版本
+): void {
   const list = readAll()
   const idx = list.findIndex((d) => d.id === id)
   if (idx >= 0) {
-    list[idx] = { ...list[idx], ...patch, updatedAt: Date.now() }
+    const old = list[idx]
+    let versions = old.versions || []
+    if (opts?.snapshot && patch.content !== undefined && patch.content !== old.content) {
+      const last = versions[versions.length - 1]
+      // 节流：距上次快照超过 5 分钟、或内容变化超过 300 字符才记一次，避免打字过程中刷爆版本列表
+      const farEnough =
+        !last || Date.now() - last.at > 5 * 60 * 1000 || Math.abs(old.content.length - last.content.length) > 300
+      if (farEnough) versions = [...versions, { at: old.updatedAt, title: old.title, content: old.content }]
+      while (versions.length > MAX_VERSIONS) versions = versions.slice(1)
+    }
+    list[idx] = { ...old, ...patch, versions, updatedAt: Date.now() }
+    writeAll(list)
+  }
+}
+
+// ---------------- 历史版本 ----------------
+
+export function listVersions(id: string): DocVersion[] {
+  return getDoc(id)?.versions || []
+}
+
+/** 回滚到指定版本：回滚前先把当前内容存为新快照，防误操作 */
+export function restoreVersion(id: string, at: number): boolean {
+  const doc = getDoc(id)
+  if (!doc) return false
+  const v = (doc.versions || []).find((x) => x.at === at)
+  if (!v) return false
+  const versions = [...(doc.versions || []), { at: doc.updatedAt, title: doc.title, content: doc.content }]
+  while (versions.length > MAX_VERSIONS) versions.shift()
+  const list = readAll()
+  const idx = list.findIndex((d) => d.id === id)
+  if (idx >= 0) {
+    list[idx] = { ...doc, title: v.title, content: v.content, versions, updatedAt: Date.now() }
+    writeAll(list)
+  }
+  return true
+}
+
+export function deleteVersion(id: string, at: number): void {
+  const doc = getDoc(id)
+  if (!doc) return
+  updateDocRaw(id, { versions: (doc.versions || []).filter((v) => v.at !== at) })
+}
+
+function updateDocRaw(id: string, patch: Partial<Doc>): void {
+  const list = readAll()
+  const idx = list.findIndex((d) => d.id === id)
+  if (idx >= 0) {
+    list[idx] = { ...list[idx], ...patch }
     writeAll(list)
   }
 }
