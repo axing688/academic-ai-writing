@@ -3,7 +3,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://REPLACE-WITH-YOUR-BACKEND-HOST/api/:path*"
+      "destination": "https://academic-ai-writing-production.up.railway.app/api/:path*"
     },
     {
       "source": "/llm/:path*",
